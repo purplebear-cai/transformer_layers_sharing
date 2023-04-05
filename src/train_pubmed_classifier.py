@@ -2,13 +2,10 @@ import os
 import math
 import torch
 import argparse
-import datasets
 import numpy as np
 import pandas as pd
 
 from torch import nn
-from pathlib import Path
-from typing import Optional
 from datasets import DatasetDict, Dataset
 from sklearn.metrics import (
     accuracy_score, 
@@ -28,12 +25,12 @@ MAX_LEN = 512
 
 
 class FineTunedBertClassifier(nn.Module):
-    def __init__(self, config, tokenizer, bert_model, embeddings, classification_head):
+    def __init__(self, config, tokenizer, embeddings, bert_model, classification_head):
         super(FineTunedBertClassifier, self).__init__()
         self.config = config
         self.tokenizer = tokenizer
         self.embeddings = embeddings
-        self.encoder = bert_model.encoder  # 
+        self.encoder = bert_model.encoder
         self.pooler = bert_model.pooler
         self.classification_head = classification_head
 
@@ -106,7 +103,6 @@ def get_pubmed_dataset(tokenizer: AutoTokenizer):
 
 
 def save_pt(tokenizer, model_bert, model_classifier, freeze_layer_count, output_dir):
-
     # Export tokenizer
     tokenizer.save_pretrained(output_dir)
 
@@ -152,23 +148,23 @@ def train(
         "seed": get_random_seed(),
     }
 
-    # 1. Load pre-trained model
+    # Load pre-trained model
     model = AutoModelForSequenceClassification.from_pretrained(model_name, return_dict=True, num_labels=5)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)    
 
-    # 2. Load dataset
+    # Load dataset
     if dataset_name == "pubmed":
         ds, label2id = get_pubmed_dataset(tokenizer)
     else:
         raise ValueError("Unknown dataset name.")
     train_ds, val_ds = ds["train"], ds["test"]
 
-    # 3. Update and save config (this is task specific)
+    # Update and save config (this is task specific)
     model.config.label2id = label2id
     model.config.id2label = {i:l for l, i in label2id.items()}
     model.config.save_pretrained(output_dir)
 
-    # 4. Freeze layers if required
+    # Freeze layers if required
     if freeze_layer_count:
         # We freeze here the embeddings of the model
         for param in model.bert.embeddings.parameters():
@@ -181,7 +177,7 @@ def train(
                 for param in layer.parameters():
                     param.requires_grad = False
 
-    # 5. Define training arguments
+    # Define training arguments
     epoch_steps = len(train_ds) / args_dict["per_device_train_batch_size"]
     args_dict["warmup_steps"] = math.ceil(epoch_steps)  # 1 epoch
     args_dict["logging_steps"] = max(1, math.ceil(epoch_steps * 0.5))  # 0.5 epoch
@@ -189,7 +185,7 @@ def train(
     args_dict["load_best_model_at_end"] = True
     training_args = TrainingArguments(output_dir=str(output_dir), **args_dict)
 
-    # 6. Start training
+    # Start training
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -200,47 +196,45 @@ def train(
     )
     trainer.train()
 
-    # 7. Export each 
+    # Export each 
     save_pt(tokenizer, model.bert, model.classifier, freeze_layer_count, output_dir)
 
     print("Training is successfully completed.")
 
 
-def load_modules(model_name, folder):
-    # 1. Load tokenizer and config
-    tokenizer = AutoTokenizer.from_pretrained(folder)
-    config = BertConfig.from_pretrained(folder)
-
-    # 2. Load models in pt format
-    saved_embeddings = torch.load(f"{folder}/embeddings_layer.pt")
-    saved_frozen_layers = torch.load(f'{folder}/frozen_layers.pt')
-    saved_fine_tuned_layers = torch.load(f'{folder}/fine_tuned_layers.pt')
-    saved_classification_head = torch.load(f"{folder}/classification_head.pt")
-
-    # 3. Initialize the original architure and load preserved states
+def load_modules(model_name, feature_extractor_dir, fine_tuned_dir, freeze_layer_count):
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(feature_extractor_dir)
+        
+    # Load pre-trained config and initial model architure
+    config = BertConfig.from_pretrained(fine_tuned_dir)
     model = BertModel.from_pretrained(model_name, config=config)
 
-    # 3.1. Load preserved embeddings
+    # Load embeddings
+    saved_embeddings = torch.load(f"{feature_extractor_dir}/embeddings_layer.pt")
     model.embeddings.load_state_dict(saved_embeddings) # load embeddings
-
-    # 3.2. Load frozen layers
+    
+    # Load frozen layers
+    saved_frozen_layers = torch.load(f'{feature_extractor_dir}/frozen_layers.pt')
     for i, layer_state_dict in enumerate(saved_frozen_layers):
         model.encoder.layer[i].load_state_dict(layer_state_dict)
-
-    # 3.3. Load fine-tuned layers
+    
+    # Load fine-tuned layers
+    saved_fine_tuned_layers = torch.load(f'{fine_tuned_dir}/fine_tuned_layers.pt')
     for i, layer_state_dict in enumerate(saved_fine_tuned_layers):
-        model.encoder.layer[i + 2].load_state_dict(layer_state_dict)
+        model.encoder.layer[i + freeze_layer_count].load_state_dict(layer_state_dict)
 
-    # 3.4. Load classification head
+    # Load classification head
+    saved_classification_head = torch.load(f"{fine_tuned_dir}/classification_head.pt")
     classification_head = nn.Linear(config.hidden_size, 5) # TODO here 5 is the num_labels
     classification_head.load_state_dict(saved_classification_head)
 
-    # 4. Create the fine-tuned model 
+    # Create the fine-tuned model 
     fine_tuned_model = FineTunedBertClassifier(
         config,
         tokenizer,
-        model, 
         model.embeddings, 
+        model,
         classification_head, 
     )
 
@@ -304,19 +298,23 @@ if __name__ == "__main__":
     parser.add_argument("--train_size", type=int, default=None)
     parser.add_argument("--keep-checkpoint", default=True, action="store_true")
     parser.add_argument("--model_name", type=str, default= "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
-    parser.add_argument("--folder", type=str, default= "etc/ml_models/pubmed/results/1.0")
+    parser.add_argument("--feature_extractor_dir", type=str, default="etc/ml_models/feature_extractor")
+    parser.add_argument("--output_dir", type=str, default= "etc/ml_models/pubmed/results/1.0")
 
     args = parser.parse_args()
     print(f"** Train size: {args.train_size} **")
     print(f"** Freeze layers: {args.freeze_layer_count} **")
 
     # train(
-    #     output_dir=args.folder,
+    #     output_dir=args.output_dir,
     #     dataset_name=args.dataset_name,
     #     freeze_layer_count=args.freeze_layer_count,
     #     model_name=args.model_name,
     # )
 
-    fine_tuned_model = load_modules(args.model_name, args.folder)
+    fine_tuned_model = load_modules(args.model_name, 
+                                    args.feature_extractor_dir, 
+                                    args.output_dir, 
+                                    args.freeze_layer_count)
     eval(fine_tuned_model, args.dataset_name)
  
