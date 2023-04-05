@@ -1,36 +1,37 @@
-import json
-import argparse
-import math
 import os
+import math
 import torch
-from torch import nn
-import pandas as pd
-from pathlib import Path
-import shutil
-from typing import Optional
-import uuid
-
+import argparse
 import datasets
-from datasets import DatasetDict, Dataset
 import numpy as np
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    Trainer,
-    TrainingArguments,
-    AutoConfig,
-)
-from torch.utils.data import DataLoader, TensorDataset
-from transformers import BertTokenizer, BertModel, BertConfig
+import pandas as pd
 
+from torch import nn
+from pathlib import Path
+from typing import Optional
+from datasets import DatasetDict, Dataset
+from sklearn.metrics import (
+    accuracy_score, 
+    precision_recall_fscore_support,
+    confusion_matrix,
+)
+from transformers import (
+    Trainer,
+    BertModel, 
+    BertConfig,
+    AutoTokenizer,
+    TrainingArguments,
+    AutoModelForSequenceClassification,
+)
+
+MAX_LEN = 512
 
 
 class FineTunedBertClassifier(nn.Module):
     def __init__(self, bert_model, embeddings, classification_head, config):
         super(FineTunedBertClassifier, self).__init__()
         self.embeddings = embeddings
-        self.encoder = bert_model.encoder
+        self.encoder = bert_model.encoder  # 
         self.pooler = bert_model.pooler
         self.classification_head = classification_head
         self.config = config
@@ -49,37 +50,8 @@ class FineTunedBertClassifier(nn.Module):
         return logits
 
 
-
-
 def get_random_seed():
     return int.from_bytes(os.urandom(4), "big")
-
-
-DATASET_MAP = {"sst2": ("glue", "sst2"), "cola": ("glue", "cola"), "imdb": ("imdb",)}
-SPLIT_DIR = Path("split")
-
-
-def get_split_path(dataset_name: str, train_size: int):
-    if dataset_name not in DATASET_MAP:
-        raise ValueError(f"unknown dataset: {dataset_name}")
-
-    dataset_tuple = DATASET_MAP[dataset_name]
-    return SPLIT_DIR / f"{dataset_tuple[0]}-{dataset_tuple[1]}-{train_size}.npy"
-
-
-def get_dataset(tokenizer, dataset_name: str, split: str, split_path: Optional[Path] = None):
-    ds = datasets.load_dataset(*DATASET_MAP[dataset_name], split=split)
-    ds = ds.shuffle(seed=42)
-
-    if split_path is not None:
-        # split_path is a npy file containing indexes of samples to keep
-        print(f"Using split file {split_path}")
-        split_ids = set(np.load(split_path).tolist())
-        ds = ds.filter(lambda idx: idx in split_ids, input_columns="idx")
-
-    ds = ds.map(lambda e: tokenizer(e["text"], padding=False, truncation=True), batched=True)
-    ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-    return ds
 
 
 def compute_metrics(pred):
@@ -90,12 +62,18 @@ def compute_metrics(pred):
     return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
 
 
-def get_qq_dataset(tokenizer):
+def get_pubmed_dataset(tokenizer: AutoTokenizer):
+    """
+    Read pubmed data to build a classifier.
+
+    :param: AutoTokenizer, HuggingFace tokenizer
+    """
     limits = 1000
-    folder = "/Users/qcai/Workspace/Projects/transformer_projects/"
+    folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
     train_path = folder + "etc/ml_models/pubmed/inputs/train.csv"
     val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
 
+    # load training set
     train_df = pd.read_csv(train_path).dropna()
     train_df = train_df.head(limits) if limits > -1 else train_df
     labels_set = set(train_df["label"])
@@ -103,63 +81,59 @@ def get_qq_dataset(tokenizer):
     id2label = {i:l for l, i in label2id.items()}
     train_df["label_id"] = train_df.apply(lambda row: label2id[row["label"]], axis=1)
 
+    # load validation set
     val_df = pd.read_csv(val_path).dropna()
-    val_df = val_df.head(300)
+    val_df = val_df.head(300) # TODO: remove the head
     val_df["label_id"] = val_df.apply(lambda row: label2id[row["label"]], axis=1)
 
+    # build training dataset
     train_texts, train_labels = list(train_df["text"]), list(train_df["label_id"])
-    val_texts, val_labels = list(val_df["text"]), list(val_df["label_id"])
-
     train_data = pd.DataFrame({"text": train_texts, "label": train_labels})
-    val_data = pd.DataFrame({"text": val_texts, "label": val_labels})
-
     train_ds = Dataset.from_pandas(train_data)
+    
+    # build validation dataset
+    val_texts, val_labels = list(val_df["text"]), list(val_df["label_id"])
+    val_data = pd.DataFrame({"text": val_texts, "label": val_labels})
     val_ds = Dataset.from_pandas(val_data)
+
+    # build the dataset for transformers, containing train and test
     ds = DatasetDict({"train": train_ds, "test": val_ds})
-
-    # ds = ds.train_test_split(test_size=0.2)
-    # dataset_dict = DatasetDict({"train": datasets["train"], "test": datasets["test"]})
-    # ds = ds.shuffle(seed=42)
-
     ds = ds.map(lambda e: tokenizer(e["text"], padding=False, truncation=True), batched=True)
     ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
+
     return ds, label2id
 
 
-def save_pt(tokenizer, model_bert, model_classifier, freeze_layer_count, folder):
-    tokenizer.save_pretrained(folder)
+def save_pt(tokenizer, model_bert, model_classifier, freeze_layer_count, output_dir):
 
-    torch.save(model_bert.embeddings.state_dict(), f'{folder}/embeddings_layer.pt')
+    # Export tokenizer
+    tokenizer.save_pretrained(output_dir)
+
+    # Export embedding layers
+    torch.save(model_bert.embeddings.state_dict(), f'{output_dir}/embeddings_layer.pt')
 
     # Separate models for frozen layers and fine-tuned layers
     frozen_layers = model_bert.encoder.layer[:freeze_layer_count]
     fine_tuned_layers = model_bert.encoder.layer[freeze_layer_count:]
 
-    # Save the first two frozen layers
+    # Export frozen layers
     frozen_layers_state_dicts = [layer.state_dict() for layer in frozen_layers]
-    torch.save(frozen_layers_state_dicts, f'{folder}/frozen_layers.pt')
+    torch.save(frozen_layers_state_dicts, f'{output_dir}/frozen_layers.pt')
 
-    # Export fine-tuned layers as ONNX
+    # Export fine-tuned layers
     fine_tuned_layers_state_dicts = [layer.state_dict() for layer in fine_tuned_layers]
-    torch.save(fine_tuned_layers_state_dicts, f'{folder}/fine_tuned_layers.pt')
+    torch.save(fine_tuned_layers_state_dicts, f'{output_dir}/fine_tuned_layers.pt')
 
-    # Export classification head as ONNX
-    from transformers import BertForSequenceClassification
-
-    # classification_model = BertForSequenceClassification.from_pretrained(model_name, config=config)
-    classification_head = model_classifier
-    torch.save(classification_head.state_dict(), f"{folder}/classification_head.pt")
-
+    # Export classification head
+    torch.save(model_classifier.state_dict(), f"{output_dir}/classification_head.pt")
 
 
 def train(
     output_dir: str,
     dataset_name: str,
-    train_size: Optional[int] = None,
     freeze_layer_count: int = 0,
     model_name: str = None,
 ):
-    split_path = get_split_path(dataset_name, train_size) if train_size is not None else None
     args_dict = {
         "evaluation_strategy": "steps",
         "per_device_train_batch_size": 16,
@@ -177,9 +151,18 @@ def train(
         "seed": get_random_seed(),
     }
 
-    config = BertConfig.from_pretrained(model_name)
+    # Load pre-trained model
     model = AutoModelForSequenceClassification.from_pretrained(model_name, return_dict=True, num_labels=5)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    # Load dataset
+    if dataset_name == "pubmed":
+        ds, label2id = get_pubmed_dataset(tokenizer)
+    else:
+        raise ValueError("Unknown dataset name.")
+    train_ds, val_ds = ds["train"], ds["test"]
+
+    # Freeze layers if required
     if freeze_layer_count:
         # We freeze here the embeddings of the model
         for param in model.bert.embeddings.parameters():
@@ -192,11 +175,8 @@ def train(
                 for param in layer.parameters():
                     param.requires_grad = False
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    ds, label2id = get_qq_dataset(tokenizer)
-    train_ds, val_ds = ds["train"], ds["test"]
-
+    
 
     model.config.label2id = label2id
     model.config.id2label = {i:l for l, i in label2id.items()}
@@ -266,14 +246,14 @@ def load_pt(model_name, folder):
     return fine_tuned_model, tokenizer
 
 def prepare_input(tokenizer, text):
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN)
     return inputs["input_ids"], inputs["attention_mask"], inputs["token_type_ids"]
 
 def eval(fine_tuned_model, tokenizer):
     label2id = fine_tuned_model.config.label2id
     id2label = {id: label for label, id in label2id.items()}
     limits = 100
-    folder = "/Users/qcai/Workspace/Projects/transformer_projects/"
+    folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
     val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
 
     val_df = pd.read_csv(val_path).dropna()
@@ -311,27 +291,22 @@ def eval(fine_tuned_model, tokenizer):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", type=str, default="imdb")
+    parser.add_argument("--dataset_name", type=str, default="pubmed")
     parser.add_argument("--freeze_layer_count", type=int, default=2)
     parser.add_argument("--train_size", type=int, default=None)
     parser.add_argument("--keep-checkpoint", default=True, action="store_true")
     parser.add_argument("--model_name", type=str, default= "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
-    parser.add_argument("--folder", type=str, default= "/Users/qcai/Downloads/last_try")
+    parser.add_argument("--folder", type=str, default= "etc/ml_models/pubmed/results/1.0")
 
     args = parser.parse_args()
-    OUTPUT_DIR = Path(args.folder)
     print(f"** Train size: {args.train_size} **")
     print(f"** Freeze layers: {args.freeze_layer_count} **")
-    output_dir = OUTPUT_DIR / str(uuid.uuid4())
     train(
         output_dir=args.folder,
         dataset_name=args.dataset_name,
-        train_size=args.train_size,
         freeze_layer_count=args.freeze_layer_count,
         model_name=args.model_name,
     )
-    # # if not args.keep_checkpoint:
-    # #     shutil.rmtree(output_dir)
 
     fine_tuned_model, tokenizer = load_pt(args.model_name, args.folder)
 
