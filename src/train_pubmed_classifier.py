@@ -28,13 +28,14 @@ MAX_LEN = 512
 
 
 class FineTunedBertClassifier(nn.Module):
-    def __init__(self, bert_model, embeddings, classification_head, config):
+    def __init__(self, config, tokenizer, bert_model, embeddings, classification_head):
         super(FineTunedBertClassifier, self).__init__()
+        self.config = config
+        self.tokenizer = tokenizer
         self.embeddings = embeddings
         self.encoder = bert_model.encoder  # 
         self.pooler = bert_model.pooler
         self.classification_head = classification_head
-        self.config = config
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
         # Use the separated embeddings layer
@@ -151,18 +152,23 @@ def train(
         "seed": get_random_seed(),
     }
 
-    # Load pre-trained model
+    # 1. Load pre-trained model
     model = AutoModelForSequenceClassification.from_pretrained(model_name, return_dict=True, num_labels=5)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Load dataset
+    # 2. Load dataset
     if dataset_name == "pubmed":
         ds, label2id = get_pubmed_dataset(tokenizer)
     else:
         raise ValueError("Unknown dataset name.")
     train_ds, val_ds = ds["train"], ds["test"]
 
-    # Freeze layers if required
+    # 3. Update and save config (this is task specific)
+    model.config.label2id = label2id
+    model.config.id2label = {i:l for l, i in label2id.items()}
+    model.config.save_pretrained(output_dir)
+
+    # 4. Freeze layers if required
     if freeze_layer_count:
         # We freeze here the embeddings of the model
         for param in model.bert.embeddings.parameters():
@@ -175,22 +181,15 @@ def train(
                 for param in layer.parameters():
                     param.requires_grad = False
 
-
-    
-
-    model.config.label2id = label2id
-    model.config.id2label = {i:l for l, i in label2id.items()}
-    model.config.save_pretrained(output_dir)
-
+    # 5. Define training arguments
     epoch_steps = len(train_ds) / args_dict["per_device_train_batch_size"]
     args_dict["warmup_steps"] = math.ceil(epoch_steps)  # 1 epoch
     args_dict["logging_steps"] = max(1, math.ceil(epoch_steps * 0.5))  # 0.5 epoch
     args_dict["save_steps"] = args_dict["logging_steps"]
     args_dict["load_best_model_at_end"] = True
-    # args_dict["run_name"] = output_dir.name
-
     training_args = TrainingArguments(output_dir=str(output_dir), **args_dict)
 
+    # 6. Start training
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -199,94 +198,103 @@ def train(
         compute_metrics=compute_metrics,
         tokenizer=tokenizer,
     )
-
     trainer.train()
 
+    # 7. Export each 
     save_pt(tokenizer, model.bert, model.classifier, freeze_layer_count, output_dir)
 
-    print("Finish training")
+    print("Training is successfully completed.")
 
 
-def load_pt(model_name, folder):
-    # # Load label2id
-    # with open(folder + "/label2id.json") as file:
-    #     label2id = json.load(file)
-
-    # Load tokenizer
+def load_modules(model_name, folder):
+    # 1. Load tokenizer and config
     tokenizer = AutoTokenizer.from_pretrained(folder)
+    config = BertConfig.from_pretrained(folder)
 
-    # Load ONNX models
+    # 2. Load models in pt format
     saved_embeddings = torch.load(f"{folder}/embeddings_layer.pt")
     saved_frozen_layers = torch.load(f'{folder}/frozen_layers.pt')
     saved_fine_tuned_layers = torch.load(f'{folder}/fine_tuned_layers.pt')
     saved_classification_head = torch.load(f"{folder}/classification_head.pt")
 
-    # Initialize the Microsoft BERT model
-    config = BertConfig.from_pretrained(folder)  # Update this with the actual name of the pretrained model
-    # config.label2id = label2id
+    # 3. Initialize the original architure and load preserved states
     model = BertModel.from_pretrained(model_name, config=config)
 
-    # Load the embeddings, frozen layers, and fine-tuned layers
-    model.embeddings.load_state_dict(saved_embeddings)
+    # 3.1. Load preserved embeddings
+    model.embeddings.load_state_dict(saved_embeddings) # load embeddings
 
-    # Replace the model's encoder layers with the loaded layers
+    # 3.2. Load frozen layers
     for i, layer_state_dict in enumerate(saved_frozen_layers):
         model.encoder.layer[i].load_state_dict(layer_state_dict)
 
+    # 3.3. Load fine-tuned layers
     for i, layer_state_dict in enumerate(saved_fine_tuned_layers):
         model.encoder.layer[i + 2].load_state_dict(layer_state_dict)
 
-    # Load the classification head
+    # 3.4. Load classification head
     classification_head = nn.Linear(config.hidden_size, 5) # TODO here 5 is the num_labels
     classification_head.load_state_dict(saved_classification_head)
 
-    # Create the fine-tuned model
-    fine_tuned_model = FineTunedBertClassifier(model, model.embeddings, classification_head, config)
+    # 4. Create the fine-tuned model 
+    fine_tuned_model = FineTunedBertClassifier(
+        config,
+        tokenizer,
+        model, 
+        model.embeddings, 
+        classification_head, 
+    )
 
-    return fine_tuned_model, tokenizer
+    return fine_tuned_model
 
-def prepare_input(tokenizer, text):
+def prepare_input(tokenizer: AutoTokenizer, text: str):
+    """
+    Prepare inputs to fine-tuned bert.
+    """
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN)
     return inputs["input_ids"], inputs["attention_mask"], inputs["token_type_ids"]
 
-def eval(fine_tuned_model, tokenizer):
+def eval(fine_tuned_model, dataset_name):
+    """
+    Evaluate the model.
+    """
     label2id = fine_tuned_model.config.label2id
     id2label = {id: label for label, id in label2id.items()}
-    limits = 100
-    folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
-    val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
+    
+    if dataset_name == "pubmed":
+        limits = 100
+        folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
+        val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
 
-    val_df = pd.read_csv(val_path).dropna()
-    val_df = val_df.head(100)
+        val_df = pd.read_csv(val_path).dropna()
+        val_df = val_df.head(limits)
 
-    val_texts, val_labels = list(val_df["text"]), list(val_df["label"])
+        val_texts, val_labels = list(val_df["text"]), list(val_df["label"])
+    else:
+        raise ValueError("Unknown dataset name.")
+    
     val_preds = []
     for val_text, val_label in zip(val_texts, val_labels):
-        input_ids, attention_mask, token_type_ids = prepare_input(tokenizer, val_text)
+        # Prepare input
+        input_ids, attention_mask, token_type_ids = prepare_input(fine_tuned_model.tokenizer, val_text)
 
-        # Run the model
+        # Run inference
         with torch.no_grad():
             logits = fine_tuned_model(input_ids, attention_mask, token_type_ids)
 
         # Decode the logits to obtain the predicted class
-        predicted_class = torch.argmax(logits, dim=-1).item()
-        predicted_labels = id2label[predicted_class]
-        val_preds.append(predicted_labels)
+        predicted_id= torch.argmax(logits, dim=-1).item()
+        predicted_label = id2label[predicted_id]
+        val_preds.append(predicted_label)
 
-        print(f"expected={val_label}, actual={predicted_class}, text={val_text}")
+        print(f"expected={val_label}, predicted_id={predicted_id}, predicted_label={predicted_label}, text={val_text}")
 
     print(f"\n=============== Performance Report ===============")
     y_true = val_labels
     y_pred = val_preds
-    print("\n==============")
-    print(accuracy_score(y_true, y_pred))
+    print(f"\nAccuracy = {accuracy_score(y_true, y_pred)}")
 
-    print("\n==============")
+    print("\nConfusion matrix = ")
     print(confusion_matrix(y_true, y_pred))
-
-
-
-
 
 
 if __name__ == "__main__":
@@ -301,16 +309,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"** Train size: {args.train_size} **")
     print(f"** Freeze layers: {args.freeze_layer_count} **")
-    train(
-        output_dir=args.folder,
-        dataset_name=args.dataset_name,
-        freeze_layer_count=args.freeze_layer_count,
-        model_name=args.model_name,
-    )
 
-    fine_tuned_model, tokenizer = load_pt(args.model_name, args.folder)
+    # train(
+    #     output_dir=args.folder,
+    #     dataset_name=args.dataset_name,
+    #     freeze_layer_count=args.freeze_layer_count,
+    #     model_name=args.model_name,
+    # )
 
-    eval(fine_tuned_model, tokenizer)
-
-
-    
+    fine_tuned_model = load_modules(args.model_name, args.folder)
+    eval(fine_tuned_model, args.dataset_name)
+ 
