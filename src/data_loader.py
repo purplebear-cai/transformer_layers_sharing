@@ -46,7 +46,7 @@ def load_pubmed_dataset(tokenizer: AutoTokenizer):
 def load_pubmed_text():
     limits = 1000
     train_path = os.path.join(project_dir, 'etc/ml_models/pubmed/inputs/train.csv')
-    val_path = os.path.join(project_dir, 'etc/ml_models/pubmed/inputs/test.csv')
+    val_path = os.path.join(project_dir, 'etc/ml_models/pubmed/inputs/validation.csv')
 
     # load training set
     train_df = pd.read_csv(train_path).dropna()

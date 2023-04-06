@@ -22,6 +22,10 @@ from transformers import (
 from constants import MODEL_NAME, FREEZE_LAYER_COUNT
 from data_loader import load_pubmed_dataset, load_narrative_dataset, load_narrative_text
 
+# Set the working directory to the script's location
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_dir = os.path.dirname(script_dir)
+
 MAX_LEN = 512
 
 
@@ -168,7 +172,7 @@ def load_modules(model_name, feature_extractor_dir, fine_tuned_dir, freeze_layer
     tokenizer = AutoTokenizer.from_pretrained(feature_extractor_dir)
         
     # Load pre-trained config and initial model architure
-    config = BertConfig.from_pretrained(model_name)
+    config = BertConfig.from_pretrained(fine_tuned_dir)
     model = BertModel.from_pretrained(model_name, config=config)
 
     # Load embeddings
@@ -217,8 +221,7 @@ def eval(fine_tuned_model, dataset_name):
     
     if dataset_name == "pubmed":
         limits = 100
-        folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
-        val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
+        val_path = os.path.join(project_dir, "etc/ml_models/pubmed/inputs/validation.csv")
 
         val_df = pd.read_csv(val_path).dropna()
         val_df = val_df.head(limits)
@@ -267,12 +270,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     output_dir = args.output_dir + args.dataset_name + "/results/1.0"
 
-    train(
-        output_dir=output_dir,
-        dataset_name=args.dataset_name,
-        freeze_layer_count=args.freeze_layer_count,
-        model_name=args.model_name,
-    )
+    # train(
+    #     output_dir=output_dir,
+    #     dataset_name=args.dataset_name,
+    #     freeze_layer_count=args.freeze_layer_count,
+    #     model_name=args.model_name,
+    # )
 
     fine_tuned_model = load_modules(args.model_name, 
                                     args.feature_extractor_dir, 
