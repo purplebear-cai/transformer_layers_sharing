@@ -2,7 +2,6 @@ import os
 import math
 import torch
 import argparse
-import numpy as np
 import pandas as pd
 
 from torch import nn
@@ -169,7 +168,7 @@ def load_modules(model_name, feature_extractor_dir, fine_tuned_dir, freeze_layer
     tokenizer = AutoTokenizer.from_pretrained(feature_extractor_dir)
         
     # Load pre-trained config and initial model architure
-    config = BertConfig.from_pretrained(fine_tuned_dir)
+    config = BertConfig.from_pretrained(model_name)
     model = BertModel.from_pretrained(model_name, config=config)
 
     # Load embeddings
@@ -257,7 +256,7 @@ def eval(fine_tuned_model, dataset_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", type=str, default="narrative")
+    parser.add_argument("--dataset_name", type=str, default="pubmed", choices=["pubmed", "narrative"])
     parser.add_argument("--freeze_layer_count", type=int, default=FREEZE_LAYER_COUNT)
     parser.add_argument("--train_size", type=int, default=None)
     parser.add_argument("--keep-checkpoint", default=True, action="store_true")
@@ -268,12 +267,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     output_dir = args.output_dir + args.dataset_name + "/results/1.0"
 
-    # train(
-    #     output_dir=output_dir,
-    #     dataset_name=args.dataset_name,
-    #     freeze_layer_count=args.freeze_layer_count,
-    #     model_name=args.model_name,
-    # )
+    train(
+        output_dir=output_dir,
+        dataset_name=args.dataset_name,
+        freeze_layer_count=args.freeze_layer_count,
+        model_name=args.model_name,
+    )
 
     fine_tuned_model = load_modules(args.model_name, 
                                     args.feature_extractor_dir, 

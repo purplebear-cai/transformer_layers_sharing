@@ -1,3 +1,4 @@
+import os
 import json
 import pandas as pd
 from datasets import DatasetDict, Dataset
@@ -6,6 +7,10 @@ from constants import MODEL_NAME
 from transformers import (
     AutoTokenizer,
 )
+
+# Set the working directory to the script's location
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_dir = os.path.dirname(script_dir)
 
 def build_datasetdict(tokenizer, train_df, val_df):
     """
@@ -40,9 +45,8 @@ def load_pubmed_dataset(tokenizer: AutoTokenizer):
 
 def load_pubmed_text():
     limits = 1000
-    folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
-    train_path = folder + "etc/ml_models/pubmed/inputs/train.csv"
-    val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
+    train_path = os.path.join(project_dir, 'etc/ml_models/pubmed/inputs/train.csv')
+    val_path = os.path.join(project_dir, 'etc/ml_models/pubmed/inputs/test.csv')
 
     # load training set
     train_df = pd.read_csv(train_path).dropna()
@@ -58,8 +62,6 @@ def load_pubmed_text():
     val_df["label_id"] = val_df.apply(lambda row: label2id[row["label"]], axis=1)
     
     return train_df, val_df, label2id
-    
-
 
 
 def load_narrative_dataset(tokenizer):
@@ -75,7 +77,8 @@ def load_narrative_text():
     Load narrative text.
     """
     limits = 200
-    in_path = "/Users/caiq/Workspace/olive/transformer_layers_sharing/etc/ml_models/narrative/inputs/narrative_nvp_binary_v2_8.vlearn.json"
+    in_path = os.path.join(project_dir, 'etc/ml_models/narrative/inputs/narrative_nvp_binary_v2_8.vlearn.json')
+
     with open(in_path) as in_file:
         data = json.load(in_file)
     texts, labels = [], []
@@ -107,3 +110,4 @@ def load_narrative_text():
 if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     load_narrative_dataset(tokenizer)
+    # load_pubmed_dataset(tokenizer)
