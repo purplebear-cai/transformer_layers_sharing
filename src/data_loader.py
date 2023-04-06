@@ -74,6 +74,7 @@ def load_narrative_text():
     """
     Load narrative text.
     """
+    limits = 200
     in_path = "/Users/caiq/Workspace/olive/transformer_layers_sharing/etc/ml_models/narrative/inputs/narrative_nvp_binary_v2_8.vlearn.json"
     with open(in_path) as in_file:
         data = json.load(in_file)
@@ -91,7 +92,8 @@ def load_narrative_text():
         label = item["categories"][0]
         labels.append(label)
     df = pd.DataFrame({"text": texts, "label": labels})
-    
+    df = df.head(limits) if limits > -1 else df
+
     train_df, val_df = train_test_split(df, test_size=0.2, stratify=df['label'])
     labels_set = set(train_df["label"])
     label2id = {l:i for i, l in enumerate(labels_set)}

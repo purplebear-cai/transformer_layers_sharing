@@ -1,3 +1,4 @@
 .DS_Store
+mlruns/
 src/backup/
 src/__pycache__/

@@ -21,7 +21,7 @@ from transformers import (
 )
 
 from constants import MODEL_NAME, FREEZE_LAYER_COUNT
-from data_loader import load_pubmed_dataset, load_narrative_dataset
+from data_loader import load_pubmed_dataset, load_narrative_dataset, load_narrative_text
 
 MAX_LEN = 512
 
@@ -63,19 +63,19 @@ def compute_metrics(pred):
 
 
 def save_pt(tokenizer, model_bert, model_classifier, freeze_layer_count, output_dir):
-    # Export tokenizer
-    tokenizer.save_pretrained(output_dir)
+    # # Export tokenizer
+    # tokenizer.save_pretrained(output_dir)
 
-    # Export embedding layers
-    torch.save(model_bert.embeddings.state_dict(), f'{output_dir}/embeddings_layer.pt')
+    # # Export embedding layers
+    # torch.save(model_bert.embeddings.state_dict(), f'{output_dir}/embeddings_layer.pt')
 
     # Separate models for frozen layers and fine-tuned layers
     frozen_layers = model_bert.encoder.layer[:freeze_layer_count]
     fine_tuned_layers = model_bert.encoder.layer[freeze_layer_count:]
 
-    # Export frozen layers
-    frozen_layers_state_dicts = [layer.state_dict() for layer in frozen_layers]
-    torch.save(frozen_layers_state_dicts, f'{output_dir}/frozen_layers.pt')
+    # # Export frozen layers
+    # frozen_layers_state_dicts = [layer.state_dict() for layer in frozen_layers]
+    # torch.save(frozen_layers_state_dicts, f'{output_dir}/frozen_layers.pt')
 
     # Export fine-tuned layers
     fine_tuned_layers_state_dicts = [layer.state_dict() for layer in fine_tuned_layers]
@@ -223,7 +223,9 @@ def eval(fine_tuned_model, dataset_name):
 
         val_df = pd.read_csv(val_path).dropna()
         val_df = val_df.head(limits)
-
+        val_texts, val_labels = list(val_df["text"]), list(val_df["label"])
+    elif dataset_name == "narrative":
+        _, val_df, _ = load_narrative_text()
         val_texts, val_labels = list(val_df["text"]), list(val_df["label"])
     else:
         raise ValueError("Unknown dataset name.")
@@ -266,12 +268,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     output_dir = args.output_dir + args.dataset_name + "/results/1.0"
 
-    train(
-        output_dir=output_dir,
-        dataset_name=args.dataset_name,
-        freeze_layer_count=args.freeze_layer_count,
-        model_name=args.model_name,
-    )
+    # train(
+    #     output_dir=output_dir,
+    #     dataset_name=args.dataset_name,
+    #     freeze_layer_count=args.freeze_layer_count,
+    #     model_name=args.model_name,
+    # )
 
     fine_tuned_model = load_modules(args.model_name, 
                                     args.feature_extractor_dir, 
