@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 
 from torch import nn
-from datasets import DatasetDict, Dataset
 from sklearn.metrics import (
     accuracy_score, 
     precision_recall_fscore_support,
@@ -20,6 +19,9 @@ from transformers import (
     TrainingArguments,
     AutoModelForSequenceClassification,
 )
+
+from constants import MODEL_NAME, FREEZE_LAYER_COUNT
+from data_loader import load_pubmed_dataset, load_narrative_dataset
 
 MAX_LEN = 512
 
@@ -58,48 +60,6 @@ def compute_metrics(pred):
     precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
     acc = accuracy_score(labels, preds)
     return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
-
-
-def get_pubmed_dataset(tokenizer: AutoTokenizer):
-    """
-    Read pubmed data to build a classifier.
-
-    :param: AutoTokenizer, HuggingFace tokenizer
-    """
-    limits = 1000
-    folder = "/Users/qcai/Workspace/Projects/transformer_layers_sharing/"
-    train_path = folder + "etc/ml_models/pubmed/inputs/train.csv"
-    val_path = folder + "etc/ml_models/pubmed/inputs/validation.csv"
-
-    # load training set
-    train_df = pd.read_csv(train_path).dropna()
-    train_df = train_df.head(limits) if limits > -1 else train_df
-    labels_set = set(train_df["label"])
-    label2id = {l:i for i, l in enumerate(labels_set)}
-    id2label = {i:l for l, i in label2id.items()}
-    train_df["label_id"] = train_df.apply(lambda row: label2id[row["label"]], axis=1)
-
-    # load validation set
-    val_df = pd.read_csv(val_path).dropna()
-    val_df = val_df.head(300) # TODO: remove the head
-    val_df["label_id"] = val_df.apply(lambda row: label2id[row["label"]], axis=1)
-
-    # build training dataset
-    train_texts, train_labels = list(train_df["text"]), list(train_df["label_id"])
-    train_data = pd.DataFrame({"text": train_texts, "label": train_labels})
-    train_ds = Dataset.from_pandas(train_data)
-    
-    # build validation dataset
-    val_texts, val_labels = list(val_df["text"]), list(val_df["label_id"])
-    val_data = pd.DataFrame({"text": val_texts, "label": val_labels})
-    val_ds = Dataset.from_pandas(val_data)
-
-    # build the dataset for transformers, containing train and test
-    ds = DatasetDict({"train": train_ds, "test": val_ds})
-    ds = ds.map(lambda e: tokenizer(e["text"], padding=False, truncation=True), batched=True)
-    ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-
-    return ds, label2id
 
 
 def save_pt(tokenizer, model_bert, model_classifier, freeze_layer_count, output_dir):
@@ -154,7 +114,9 @@ def train(
 
     # Load dataset
     if dataset_name == "pubmed":
-        ds, label2id = get_pubmed_dataset(tokenizer)
+        ds, label2id = load_pubmed_dataset(tokenizer)
+    elif dataset_name == "narrative":
+        ds, label2id = load_narrative_dataset(tokenizer)
     else:
         raise ValueError("Unknown dataset name.")
     train_ds, val_ds = ds["train"], ds["test"]
@@ -293,28 +255,27 @@ def eval(fine_tuned_model, dataset_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", type=str, default="pubmed")
-    parser.add_argument("--freeze_layer_count", type=int, default=2)
+    parser.add_argument("--dataset_name", type=str, default="narrative")
+    parser.add_argument("--freeze_layer_count", type=int, default=FREEZE_LAYER_COUNT)
     parser.add_argument("--train_size", type=int, default=None)
     parser.add_argument("--keep-checkpoint", default=True, action="store_true")
-    parser.add_argument("--model_name", type=str, default= "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+    parser.add_argument("--model_name", type=str, default= MODEL_NAME)
     parser.add_argument("--feature_extractor_dir", type=str, default="etc/ml_models/feature_extractor")
-    parser.add_argument("--output_dir", type=str, default= "etc/ml_models/pubmed/results/1.0")
-
+    parser.add_argument("--output_dir", type=str, default= "etc/ml_models/")
+    
     args = parser.parse_args()
-    print(f"** Train size: {args.train_size} **")
-    print(f"** Freeze layers: {args.freeze_layer_count} **")
+    output_dir = args.output_dir + args.dataset_name + "/results/1.0"
 
-    # train(
-    #     output_dir=args.output_dir,
-    #     dataset_name=args.dataset_name,
-    #     freeze_layer_count=args.freeze_layer_count,
-    #     model_name=args.model_name,
-    # )
+    train(
+        output_dir=output_dir,
+        dataset_name=args.dataset_name,
+        freeze_layer_count=args.freeze_layer_count,
+        model_name=args.model_name,
+    )
 
     fine_tuned_model = load_modules(args.model_name, 
                                     args.feature_extractor_dir, 
-                                    args.output_dir, 
+                                    output_dir, 
                                     args.freeze_layer_count)
     eval(fine_tuned_model, args.dataset_name)
  

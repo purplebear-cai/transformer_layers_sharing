@@ -13,8 +13,8 @@ import torch
 import argparse
 import pandas as pd
 from torch import nn
-from pubmed_classifier import FineTunedBertClassifier
-from pubmed_classifier import load_modules, prepare_input
+from sentence_classifier import FineTunedBertClassifier
+from sentence_classifier import load_modules, prepare_input
 from transformers import (
     pipeline,
     Trainer,
