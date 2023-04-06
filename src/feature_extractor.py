@@ -13,7 +13,8 @@ from transformers import (
     BertModel,
     AutoTokenizer,
     AutoModelForSequenceClassification,
-)       
+)
+from constants import MODEL_NAME, FREEZE_LAYER_COUNT  
 
 
 def export_shared_architecture(model_name: str, freeze_layer_count: int, output_dir: str) -> None:
@@ -35,8 +36,8 @@ def export_shared_architecture(model_name: str, freeze_layer_count: int, output_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--freeze_layer_count", type=int, default=2)
-    parser.add_argument("--model_name", type=str, default= "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract")
+    parser.add_argument("--freeze_layer_count", type=int, default=FREEZE_LAYER_COUNT)
+    parser.add_argument("--model_name", type=str, default= MODEL_NAME)
     parser.add_argument("--out_folder", type=str, default= "etc/ml_models/feature_extractor")
     args = parser.parse_args()
 
