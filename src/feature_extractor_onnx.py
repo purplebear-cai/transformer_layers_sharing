@@ -18,7 +18,7 @@ from transformers import (
     AutoModelForSequenceClassification,
 )
 from transformers.models.bert.modeling_bert import BertEmbeddings
-from constants import MODEL_NAME, FREEZE_LAYER_COUNT, MAX_LEN, HIDDEN_SIZE
+from constants import MAX_LEN, HIDDEN_SIZE
 
 class FrozenBertModel(nn.Module):
     def __init__(self, bert, freeze_layer_count):
@@ -36,8 +36,9 @@ class FrozenBertModel(nn.Module):
     
 
 class FeatureExtractorOnnx(nn.Module):
-    def __init__(self, feature_folder):
+    def __init__(self, pretrained_model_name, feature_folder):
         super(FeatureExtractorOnnx, self).__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
         self.embedding_session = self.load_onnx_model(f"{feature_folder}/embeddings_layer.onnx")
         self.frozen_layer_session = self.load_onnx_model(f"{feature_folder}/frozen_layers.onnx")
 
@@ -66,6 +67,20 @@ class FeatureExtractorOnnx(nn.Module):
         frozen_session_output_name = self.frozen_layer_session.get_outputs()[0].name
         frozen_outputs = self.frozen_layer_session.run([frozen_session_output_name], frozen_session_inputs)[0]
         return torch.from_numpy(frozen_outputs)
+    
+    def extract(self, texts):
+        """
+        Extract contextual embeddings given texts. The high-level pipeline looks like below:
+        texts --> embedding session --> frozen_layer session --> contextual embeddings
+        """
+        inputs = self.tokenizer(texts, return_tensors="pt", padding="max_length", truncation=True, max_length=512)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+
+        with torch.no_grad():
+            contextual_embeddings = self(input_ids, attention_mask)
+
+        return contextual_embeddings
 
 def export_shared_architecture_as_onnx(model_name: str, freeze_layer_count: int, output_dir: str) -> None:
     """

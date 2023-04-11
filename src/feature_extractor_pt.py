@@ -12,15 +12,14 @@ from torch import nn, Tensor
 from transformers import (
     AutoModel,
     AutoTokenizer,
-    BertTokenizerFast,
     AutoModelForSequenceClassification,
 )
-from constants import MAX_LEN
     
 
 class FeatureExtractorPt(nn.Module):
     def __init__(self, pretrained_model_name, feature_folder, num_frozen_layers):
         super(FeatureExtractorPt, self).__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
         pretrained_model = AutoModel.from_pretrained(pretrained_model_name)
         self.embeddings = pretrained_model.embeddings
         self.transformer_layers = nn.ModuleList(pretrained_model.encoder.layer[:num_frozen_layers])
@@ -42,6 +41,16 @@ class FeatureExtractorPt(nn.Module):
         for layer in self.transformer_layers:
             x = layer(x, attention_mask=attention_mask)[0]
         return x
+    
+    def extract(self, texts):
+        inputs = self.tokenizer(texts, return_tensors="pt", padding="max_length", truncation=True, max_length=512)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+
+        with torch.no_grad():
+            contextual_embeddings = self(input_ids, attention_mask)
+
+        return contextual_embeddings
 
 
 def export_shared_architecture_as_pt(model_name: str, freeze_layer_count: int, output_dir: str) -> None:
