@@ -264,18 +264,18 @@ if __name__ == "__main__":
     parser.add_argument("--train_size", type=int, default=None)
     parser.add_argument("--keep-checkpoint", default=True, action="store_true")
     parser.add_argument("--model_name", type=str, default= MODEL_NAME)
-    parser.add_argument("--feature_extractor_dir", type=str, default="etc/ml_models/feature_extractor")
+    parser.add_argument("--feature_extractor_dir", type=str, default="etc/ml_models/feature_extractor/pt")
     parser.add_argument("--output_dir", type=str, default= "etc/ml_models/")
     
     args = parser.parse_args()
     output_dir = args.output_dir + args.dataset_name + "/results/1.0"
 
-    # train(
-    #     output_dir=output_dir,
-    #     dataset_name=args.dataset_name,
-    #     freeze_layer_count=args.freeze_layer_count,
-    #     model_name=args.model_name,
-    # )
+    train(
+        output_dir=output_dir,
+        dataset_name=args.dataset_name,
+        freeze_layer_count=args.freeze_layer_count,
+        model_name=args.model_name,
+    )
 
     fine_tuned_model = load_modules(args.model_name, 
                                     args.feature_extractor_dir, 
