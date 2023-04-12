@@ -18,7 +18,11 @@ from transformers import (
     AutoModelForSequenceClassification,
 )
 from transformers.models.bert.modeling_bert import BertEmbeddings
+from optimum.onnxruntime import ORTQuantizer
+from onnxruntime.quantization import quantize_dynamic, QuantType
+from optimum.onnxruntime.configuration import AutoQuantizationConfig
 from constants import MAX_LEN, HIDDEN_SIZE
+
 
 class FrozenBertModel(nn.Module):
     def __init__(self, bert, freeze_layer_count):
@@ -36,11 +40,15 @@ class FrozenBertModel(nn.Module):
     
 
 class FeatureExtractorOnnx(nn.Module):
-    def __init__(self, pretrained_model_name, feature_folder):
+    def __init__(self, pretrained_model_name, feature_folder, quantized=False):
         super(FeatureExtractorOnnx, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
-        self.embedding_session = self.load_onnx_model(f"{feature_folder}/embeddings_layer.onnx")
-        self.frozen_layer_session = self.load_onnx_model(f"{feature_folder}/frozen_layers.onnx")
+        if not quantized:
+            self.embedding_session = self.load_onnx_model(f"{feature_folder}/embeddings_layer.onnx")
+            self.frozen_layer_session = self.load_onnx_model(f"{feature_folder}/frozen_layers.onnx")
+        else:
+            self.embedding_session = self.load_onnx_model(f"{feature_folder}/embeddings_layer_quantized.onnx")
+            self.frozen_layer_session = self.load_onnx_model(f"{feature_folder}/frozen_layers_quantized.onnx")
 
     @staticmethod
     def load_onnx_model(onnx_file: str) -> InferenceSession:
@@ -138,3 +146,24 @@ def save_frozen_layers_as_onnx(bert_model: BertModel, freeze_layer_count: int, o
                       output_names=['frozen_states'], 
                       dynamic_axes=dynamic_axes, 
                       opset_version=12)
+
+
+def quantize_onnx_model(onnx_model_path, quantized_model_path) -> None:
+    """
+    Convert onnx model to quantized onnx model.
+    """
+    # dynamic_quantizer = ORTQuantizer.from_pretrained(onnx_model_path)
+    # dqconfig = AutoQuantizationConfig.avx512_vnni(is_static=False, per_channel=False)
+    # dynamic_quantizer.quantize(save_dir=quantized_model_path, quantization_config=dqconfig)
+    quantize_dynamic(
+        onnx_model_path, 
+        quantized_model_path, 
+        weight_type=QuantType.QInt8,
+    )
+
+def quantize_shared_architecture(onnx_folder) -> None:
+    """
+    Quantize the embedding layers and frozen layers for faster inference and smaller model size.
+    """
+    quantize_onnx_model(f"{onnx_folder}/embeddings_layer.onnx", f"{onnx_folder}/embeddings_layer_quantized.onnx")
+    quantize_onnx_model(f"{onnx_folder}/frozen_layers.onnx", f"{onnx_folder}/frozen_layers_quantized.onnx")
