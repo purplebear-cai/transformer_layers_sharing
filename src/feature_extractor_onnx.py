@@ -8,6 +8,7 @@ Split the pre-trained transformers into four components:
 Preserve (a) and (b) as they will be shared across different tasks.
 """
 import torch
+import numpy as np
 from torch import nn, Tensor
 import onnxruntime as ort
 from onnxruntime import InferenceSession
@@ -58,10 +59,14 @@ class FeatureExtractorOnnx(nn.Module):
         session = ort.InferenceSession(onnx_file)
         return session
 
-    def forward(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
+    def forward(self, input_ids: Tensor, token_type_ids: Tensor, attention_mask: Tensor) -> Tensor:
         # Run embedding session
         embedding_session_input_name = self.embedding_session.get_inputs()[0].name
-        embedding_session_inputs = {embedding_session_input_name: input_ids.numpy()}
+        embedding_session_input_add_name = self.embedding_session.get_inputs()[1].name
+        embedding_session_inputs = {
+            embedding_session_input_name: input_ids.numpy(), 
+            embedding_session_input_add_name: token_type_ids.numpy()
+            }
         embeddings_session_output_name = self.embedding_session.get_outputs()[0].name
         embeddings = self.embedding_session.run([embeddings_session_output_name], embedding_session_inputs)[0]
 
@@ -83,10 +88,11 @@ class FeatureExtractorOnnx(nn.Module):
         """
         inputs = self.tokenizer(texts, return_tensors="pt", padding="max_length", truncation=True, max_length=512)
         input_ids = inputs["input_ids"]
+        token_type_ids = inputs["token_type_ids"]
         attention_mask = inputs["attention_mask"]
 
         with torch.no_grad():
-            contextual_embeddings = self(input_ids, attention_mask)
+            contextual_embeddings = self(input_ids, token_type_ids, attention_mask)
 
         return contextual_embeddings
 
@@ -127,6 +133,35 @@ def save_embedding_as_onnx(model: BertEmbeddings, tokenizer: BertTokenizerFast, 
                       dynamic_axes=dynamic_axes, 
                       opset_version=12)
 
+    # remove_input(onnx_file + ".ori", "onnx::Add_1", onnx_file)
+    
+
+def remove_input(model_path, input_name, output_model_path):
+        import onnx
+        from onnx import helper
+        model = onnx.load(model_path)
+
+        # Find and remove the input from the graph input if it exists
+        input_to_remove = None
+        for input_tensor in model.graph.input:
+            if input_tensor.name == input_name:
+                input_to_remove = input_tensor
+                break
+
+        if input_to_remove:
+            model.graph.input.remove(input_to_remove)
+        else:
+            print(f"Input '{input_name}' not found in the model.")
+
+        # Remove the input from the initializers if it exists
+        for i, init in enumerate(model.graph.initializer):
+            if init.name == input_name:
+                model.graph.initializer.pop(i)
+                break
+
+        # Save the modified model
+        onnx.save(model, output_model_path)
+        
 
 def save_frozen_layers_as_onnx(bert_model: BertModel, freeze_layer_count: int, onnx_file: str) -> None:
     """

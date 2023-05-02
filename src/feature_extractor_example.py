@@ -46,7 +46,7 @@ if __name__ == "__main__":
     
     # # EXPORT SHARED ARCHITECTURE
     # export_shared_architecture_as_pt(args.model_name, args.freeze_layer_count, f"{args.feature_folder}/pt")
-    # export_shared_architecture_as_onnx(args.model_name, args.freeze_layer_count, f"{args.feature_folder}/onnx")
+    export_shared_architecture_as_onnx(args.model_name, args.freeze_layer_count, f"{args.feature_folder}/onnx")
     # quantize_shared_architecture(f"{args.feature_folder}/onnx")
 
     # INFERENCE WITH SHARED ARCHITECTUR
